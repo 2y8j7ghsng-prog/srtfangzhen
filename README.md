@@ -1,32 +1,50 @@
-# git-practice
+# SRT 仿真项目（srtfangzhen）
 
-练手用的仓库，随便折腾，搞坏了删掉重来就行。
+> TODO：一句话说清这个项目仿真的是什么、要回答什么问题
 
-## Git 速查表
+## 项目简介
 
-| 场景 | 命令 |
-|---|---|
-| 看当前状态（最常用，迷路了先敲它） | `git status` |
-| 收集所有改动 | `git add .` |
-| 只收集某个文件 | `git add 文件名` |
-| 存一个快照 | `git commit -m "改了什么"` |
-| 推到 GitHub | `git push` |
-| 从 GitHub 拉最新 | `git pull` |
-| 看提交历史 | `git log --oneline` |
-| 看远程地址对不对 | `git remote -v` |
-| 改了但想撤销（危险操作） | `git restore 文件名` |
-| 回到某个旧版本 | `git checkout 提交哈希` |
+TODO：背景（SRT 立项背景）、研究目标、仿真对象、预期产出。
 
-## 一次完整的改动流程
+## 目录结构
 
-```bash
-git status          # 1. 先看看改了啥
-git add .           # 2. 收集
-git commit -m "..." # 3. 存档
-git push            # 4. 上传
+```
+srtfangzhen/
+├─ docs/       文档：方案、公式推导、参考文献、会议记录
+├─ models/     仿真模型：Simulink / COMSOL 等工程文件
+├─ scripts/    脚本：参数扫描、数据处理、画图
+├─ data/       输入数据：实测数据、材料参数、边界条件
+└─ results/    输出结果：图片、导出的数据表
 ```
 
-## 什么时候该 commit
+## 环境依赖
 
-改完一个完整的小功能、或者修好一个 bug 就存一次。
-改了三行还没验证过就先别存——历史里全是垃圾提交，以后想回退都找不到。
+| 工具 | 版本 | 用途 |
+|---|---|---|
+| TODO: MATLAB / Simulink | TODO | TODO |
+| TODO: COMSOL Multiphysics | TODO | TODO |
+| TODO: Python | TODO | TODO |
+
+> 写清楚版本号很重要——半年后换电脑重装，你不会记得当时用的是哪个版本。
+
+## 快速开始
+
+```bash
+git clone https://github.com/xxxr2007/srtfangzhen.git
+cd srtfangzhen
+```
+
+TODO：跑通第一个仿真的步骤（打开哪个模型、运行哪个脚本、预期看到什么）。
+
+## 开发规范
+
+- `main` 保持"能跑"的状态，大改动开 `feature/xxx` 分支
+- 提交信息写清楚**改了什么、为什么改**，一行写不下就空一行写正文
+- 仿真输出（图片、大数据表）**不要**无脑提交，先看 `.gitignore`
+- 模型文件改了记得把**参数设置**也记录在 docs 里，二进制模型没法看 diff
+
+## 开发日志
+
+| 日期 | 内容 |
+|---|---|
+| 2026-09-16 | 仓库初始化 |

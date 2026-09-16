@@ -1,10 +1,47 @@
+# ===== MATLAB / Simulink =====
+*.asv
+*.m~
+*.autosave
+*.slx.autosave
+*.mdl.autosave
+slprj/
+*.slxc
+*.spl
+*.mex*
+*_backup/
+codegen/
+html/
+*.mat.temp
+
+# ===== COMSOL =====
+*.mph~
+*.class
+*.java
+
+# ===== 通用临时/备份 =====
 *.tmp
-*.log
+*.temp
 *.bak
-build/
-Debug/
-Release/
+*.log
+*~
+
+# ===== 输出结果（图片和数据表按需手动 add）=====
+results/*.png
+results/*.jpg
+results/*.csv
+results/*.xlsx
+!results/.gitkeep
+
+# ===== Python =====
 __pycache__/
+*.pyc
+venv/
+.venv/
+.ipynb_checkpoints/
+
+# ===== 编辑器 / 系统 =====
 .vscode/
+.idea/
+.DS_Store
 Thumbs.db
 desktop.ini
