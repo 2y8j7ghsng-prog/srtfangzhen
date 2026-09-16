@@ -1,0 +1,10 @@
+*.tmp
+*.log
+*.bak
+build/
+Debug/
+Release/
+__pycache__/
+.vscode/
+Thumbs.db
+desktop.ini
