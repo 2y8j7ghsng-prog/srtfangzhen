@@ -1,10 +1,13 @@
 /*=====================================================================
  * 多电机协作（同步）控制仿真 —— C 语言实现（嵌入式风格）
  *
- * 模型：3 台带参数摄动的电机（转速环 PI + 转矩饱和 + 条件抗积分饱和）
+ * 模型：4 台带参数摄动的电机（转速环 PI + 转矩饱和 + 条件抗积分饱和）
  * 策略：主从 / 交叉耦合(CCC) / 惯量加权偏差耦合(DCC)
  * 输出：results/sim_data_c.csv  降采样转速数据（供 plot_results.py 画图）
  *       results/metrics_c.csv   指标汇总
+ *
+ * 电机台数：只改 N_MOTOR 和 J_MOTOR/B_MOTOR 两张参数表即可扩展，
+ *           全部循环、积分器、CSV 输出均按 N_MOTOR 自动适配。
  *
  * 编译（在本仓库根目录执行）：
  *   gcc -O2 -o build/multi_motor_sync.exe scripts/multi_motor_sync.c -lm   <- 推荐
@@ -24,15 +27,15 @@
 #include <direct.h>  /* _mkdir() —— Windows 下创建输出目录 results/ */
 
 /*====================== 参数区（与 data/params.json 对应） ======================*/
-#define N_MOTOR        3              /* 电机台数；三台同型号，参数带 ±10% 摄动 */
+#define N_MOTOR        4              /* 电机台数；四台同型号，参数带 ±10% 摄动 */
 #define DT             1e-4           /* 仿真步长 s（0.1 ms），显式欧拉积分步长 */
 #define T_END          3.0            /* 总仿真时长 s                  */
 #define N_STEPS        30000          /* = T_END / DT（静态数组长度需整型常量） */
 
-/* 三台同型号电机，±10% 参数摄动（体现多电机不一致性）
+/* 四台同型号电机，±10% 参数摄动（体现多电机不一致性）
    const 修饰 -> 只读，编译器可放入 .rdata 段并做常量传播优化 */
-static const double J_MOTOR[N_MOTOR] = { 0.010, 0.011, 0.0095 };  /* 转动惯量 kg*m^2（1/2/3 号） */
-static const double B_MOTOR[N_MOTOR] = { 0.0012, 0.0011, 0.0013 };/* 粘性摩擦 N*m*s/rad（1/2/3 号） */
+static const double J_MOTOR[N_MOTOR] = { 0.010, 0.011, 0.0095, 0.0105 };   /* 转动惯量 kg*m^2（1/2/3/4 号） */
+static const double B_MOTOR[N_MOTOR] = { 0.0012, 0.0011, 0.0013, 0.00115 };/* 粘性摩擦 N*m*s/rad（1/2/3/4 号） */
 
 #define TORQUE_LIMIT   5.0            /* 转矩限幅 N*m（模拟电机/变频器能力上限） */
 #define SPEED_KP       0.8            /* 转速环 Kp  N*m/(rad/s)    */
@@ -45,6 +48,9 @@ static const double B_MOTOR[N_MOTOR] = { 0.0012, 0.0011, 0.0013 };/* 粘性摩�
 #define T_LOAD_SIN     2.0            /* 电机3 波动负载起始 s      */
 #define TL_SIN_AMP     0.4            /* 电机3 波动负载幅值 N*m    */
 #define TL_SIN_FREQ    2.0            /* 电机3 波动负载频率 Hz     */
+#define T_LOAD_RAMP    1.8            /* 电机4 斜坡负载起始 s      */
+#define T_RAMP_FULL    2.6            /* 电机4 达到满负载的时刻 s  */
+#define TL_RAMP        1.0            /* 电机4 斜坡负载终值 N*m    */
 
 #define SYNC_KP        0.6            /* 同步补偿比例增益 Ks       */
 #define SYNC_KI        5.0            /* 同步补偿积分增益 Ksi      */
@@ -76,11 +82,12 @@ static double speed_ref(double t)
     return (t < RAMP_END) ? (W_STAR * t / RAMP_END) : W_STAR;
 }
 
-/* 各电机负载转矩：
-     - 1 号机 全程空载；
+/* 各电机负载转矩（四种典型扰动各占一台，覆盖"无扰/突变/周期/渐变"谱系）：
+     - 1 号机 全程空载（基准机）；
      - 2 号机 t≥1.2 s 起突加 1.8 N*m 恒负载（模拟单机卡滞 / 切削阻力）；
-     - 3 号机 t≥2.0 s 起叠加 0.4·sin(2π·2t) N*m 周期波动负载。
-   OUT: tl[N_MOTOR] —— 本步三台电机的负载转矩，缓冲区由调用者提供 */
+     - 3 号机 t≥2.0 s 起叠加 0.4·sin(2π·2t) N*m 周期波动负载；
+     - 4 号机 t∈[1.8, 2.6] s 线性斜坡加载至 1.0 N*m 并保持（渐变负载）。
+   OUT: tl[N_MOTOR] —— 本拍四台电机的负载转矩，缓冲区由调用者提供 */
 static void load_torque(double t, double tl[N_MOTOR])
 {
     int i;
@@ -89,6 +96,12 @@ static void load_torque(double t, double tl[N_MOTOR])
     if (t >= T_LOAD_SIN)
         tl[2] = TL_SIN_AMP * sin(2.0 * 3.14159265358979 * TL_SIN_FREQ
                                  * (t - T_LOAD_SIN));            /* 电机3 波动负载   */
+    if (t >= T_LOAD_RAMP) {
+        /* 线性斜坡：未到满载时刻按比例上升，到点后钳位在终值 TL_RAMP */
+        double a = (t < T_RAMP_FULL)
+                   ? (t - T_LOAD_RAMP) / (T_RAMP_FULL - T_LOAD_RAMP) : 1.0;
+        tl[3] = TL_RAMP * a;                                     /* 电机4 渐变负载   */
+    }
     /* 注：π 直接写字面量，避免依赖非标准宏 M_PI，便于跨编译器移植 */
 }
 
@@ -135,14 +148,14 @@ static double sync_error(const double w[N_MOTOR])
 }
 
 /*====================== 三种策略 ======================*/
-/* 主从：1 号机为主机跟踪给定，2/3 号跟踪主机"上一拍"的实际转速。
+/* 主从：1 号机为主机跟踪给定，2/3/4 号跟踪主机"上一拍"的实际转速。
    IN: fp 已打开的 CSV 句柄（按 OUT_EVERY 降采样写转速）
    说明：从机参考取 prev_master 而非本拍的 w[0]，对应实际系统中
          "主机测速 → 通信 → 从机执行"必然存在的一拍延迟。 */
 static void run_master_slave(FILE *fp)
 {
-    double w[N_MOTOR] = { 0, 0, 0 };           /* 三台电机转速状态，从静止起步 */
-    double integ[N_MOTOR] = { 0, 0, 0 };       /* 三路转速环 PI 积分器 */
+    double w[N_MOTOR] = { 0 };                 /* 四台电机转速状态，从静止起步 */
+    double integ[N_MOTOR] = { 0 };             /* 四路转速环 PI 积分器 */
     double tl[N_MOTOR], refs[N_MOTOR], prev_master = 0.0;
     int k, i;
 
@@ -150,8 +163,8 @@ static void run_master_slave(FILE *fp)
         double t = k * DT;                     /* 当前仿真时刻 s */
         load_torque(t, tl);                    /* 求本拍负载转矩 */
         refs[0] = speed_ref(t);                /* 主机：跟踪给定斜坡 */
-        refs[1] = prev_master;                 /* 从机2：跟踪主机上一拍转速 */
-        refs[2] = prev_master;                 /* 从机3：同上 */
+        for (i = 1; i < N_MOTOR; i++)
+            refs[i] = prev_master;             /* 全部从机：跟踪主机上一拍转速 */
         for (i = 0; i < N_MOTOR; i++) {
             double te = torque_pi(refs[i], w[i], &integ[i]);   /* 转速环算转矩 */
             w[i] = plant_step(w[i], te, tl[i], i);             /* 机械方程推进一拍 */
@@ -171,9 +184,9 @@ static void run_master_slave(FILE *fp)
    直观理解：谁比大家快就把谁的参考压低、反之抬高 —— 全场一起"扶"受扰的那台。 */
 static void run_cross_coupling(FILE *fp)
 {
-    double w[N_MOTOR] = { 0, 0, 0 };           /* 三台电机转速状态 */
-    double integ[N_MOTOR] = { 0, 0, 0 };       /* 三路转速环 PI 积分器 */
-    double isync[N_MOTOR] = { 0, 0, 0 };       /* 三路同步补偿积分器 ∫ε_i dt */
+    double w[N_MOTOR] = { 0 };                 /* 四台电机转速状态 */
+    double integ[N_MOTOR] = { 0 };             /* 四路转速环 PI 积分器 */
+    double isync[N_MOTOR] = { 0 };             /* 四路同步补偿积分器 ∫ε_i dt */
     double tl[N_MOTOR];
     int k, i, j;
 
@@ -204,8 +217,8 @@ static void run_cross_coupling(FILE *fp)
                  DCC 对每对偏差各有一个积分器，响应更偏向跟随高惯量电机。 */
 static void run_deviation_coupling(FILE *fp)
 {
-    double w[N_MOTOR] = { 0, 0, 0 };              /* 三台电机转速状态 */
-    double integ[N_MOTOR] = { 0, 0, 0 };          /* 三路转速环 PI 积分器 */
+    double w[N_MOTOR] = { 0 };                    /* 四台电机转速状态 */
+    double integ[N_MOTOR] = { 0 };                /* 四路转速环 PI 积分器 */
     double ipair[N_MOTOR][N_MOTOR] = { { 0 } };   /* 成对同步积分器 ipair[i][j]：i 对 j 的偏差积分 */
     double tl[N_MOTOR];
     int k, i, j;
@@ -277,10 +290,11 @@ static Metrics evaluate(const char *name)
 }
 
 /*====================== 主流程 ======================*/
+#define N_STRATEGY 3                  /* 策略数量（主从/CCC/DCC），与电机台数无关 */
 int main(void)
 {
     FILE *fp;
-    Metrics ms[3];                /* 三个策略各存一份指标 */
+    Metrics ms[N_STRATEGY];           /* 三个策略各存一份指标 */
     int i;
 
     _mkdir("results");   /* 已存在则返回 -1，此处忽略即可 */
@@ -302,7 +316,7 @@ int main(void)
     fp = fopen("results/metrics_c.csv", "w");
     if (!fp) { printf("[ERR] cannot open results/metrics_c.csv\n"); return 1; }
     fprintf(fp, "strategy,rms_rad_s,peak_rad_s,recover_s,dip_rad_s\n");
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < N_STRATEGY; i++)
         fprintf(fp, "%s,%.3f,%.3f,%.3f,%.3f\n",
                 ms[i].name, ms[i].rms, ms[i].peak, ms[i].rec, ms[i].dip);
     fclose(fp);
@@ -310,7 +324,7 @@ int main(void)
     /* ---- 控制台汇总表 ---- */
     printf("\n===== metrics =====\n");
     printf("%-20s%10s%10s%10s%10s\n", "strategy", "RMS", "peak", "rec(s)", "dip");
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < N_STRATEGY; i++)
         printf("%-20s%10.3f%10.3f%10.3f%10.3f\n",
                ms[i].name, ms[i].rms, ms[i].peak, ms[i].rec, ms[i].dip);
     printf("\noutput: results/sim_data_c.csv, results/metrics_c.csv\n");

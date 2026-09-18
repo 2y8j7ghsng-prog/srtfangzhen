@@ -18,7 +18,7 @@ Ks = P.sync_kp;   Ksi = P.sync_ki;             % 同步补偿 PI 增益
 %     保留是为了断点调试时能在工作区里直接看到全套参数值。
 
 %% 三种策略
-w_ms = run_master_slave(P, t);         % 主从：1 号机为主机，2/3 号跟踪主机实际转速
+w_ms = run_master_slave(P, t);         % 主从：1 号机为主机，2/3/4 号跟踪主机实际转速
 w_cc = run_cross_coupling(P, t);       % 交叉耦合(CCC)：对"自身与平均转速之差"做补偿
 w_dc = run_deviation_coupling(P, t);   % 偏差耦合(DCC)：对每一对偏差按惯量加权补偿
 runs = {struct('name','主从控制','w',w_ms), ...   % 打包成元胞数组，便于后面循环统一处理
@@ -37,18 +37,20 @@ for r = 1:3
 end
 xline(P.t_load_step, 'r:', '电机2突加负载');   % 标出突加负载时刻，便于肉眼定位扰动
 xlabel('时间 (s)'); ylabel('同步误差 max|ω_i−ω_j| (rad/s)');
-title('三种同步策略的同步误差对比'); grid on; legend show;
+title('三种同步策略的同步误差对比（四电机）'); grid on; legend show;
 saveas(gcf, 'sync_error_comparison.png');      % 存到"当前工作目录"（MATLAB 不认 .m 所在目录）
 
 %% 转速跟随图
 figure('Position',[100 100 900 750]);
+legendEntries = [arrayfun(@(i) sprintf('电机%d', i), 1:P.n, 'UniformOutput', false), {'给定'}];
+% 图例项按台数动态生成，改 n 不用再手改 legend
 for r = 1:3
     subplot(3,1,r); hold on;                  % 3 行 1 列中的第 r 格，叠加绘制
-    plot(t, runs{r}.w, 'LineWidth', 1);       % 三条曲线 = 三台电机的转速
+    plot(t, runs{r}.w, 'LineWidth', 1);       % n 条曲线 = n 台电机的转速
     plot(t, min(P.w_star*t/P.ramp_end, P.w_star), 'k--');   % 给定转速斜坡（min 实现"升到顶即保持"）
     xline(P.t_load_step, 'r:');
-    title([runs{r}.name '：三电机转速跟随']); ylabel('\omega (rad/s)');
-    grid on; legend('电机1','电机2','电机3','给定');
+    title([runs{r}.name '：四电机转速跟随']); ylabel('\omega (rad/s)');
+    grid on; legend(legendEntries{:});
 end
 xlabel('时间 (s)');                           % 只在最下面一格标 x 轴，避免重复
 saveas(gcf, 'speed_tracking.png');
@@ -65,11 +67,11 @@ disp('完成：metrics.csv / speed_tracking.png / sync_error_comparison.png');
 %% ===================== 策略实现 =====================
 function w = run_master_slave(P, t)
     n = P.n; dt = P.dt; N = numel(t);          % 台数 / 步长 / 步数
-    w = zeros(N, n); integ = zeros(1, n);      % 转速轨迹 N×n；三路转速环 PI 积分器
+    w = zeros(N, n); integ = zeros(1, n);      % 转速轨迹 N×n；n 路转速环 PI 积分器
     for k = 1:N-1                              % 循环到 N-1：每拍都要写第 k+1 行的状态
         wr = speed_ref(t(k), P);               % 本拍给定转速
         if k == 1, master = 0; else, master = w(k,1); end   % 主机"上一拍"转速（首拍尚无历史，取 0）
-        refs = [wr, master, master];           % 1 号机跟踪给定；2/3 号机跟踪主机实际转速
+        refs = [wr, repmat(master, 1, n-1)];   % 1 号机跟踪给定；其余从机跟踪主机实际转速
         tl = load_torque(t(k), P);             % 本拍各机负载转矩
         for i = 1:n
             [te, integ(i)] = torque_pi(refs(i), w(k,i), integ(i), P);    % 转速环算电磁转矩
@@ -138,6 +140,9 @@ function tl = load_torque(t, P)
     if t >= P.t_load_sin
         tl(3) = P.tl_sin_amp*sin(2*pi*P.tl_sin_freq*(t - P.t_load_sin));   % 3 号机周期波动负载
     end
+    if t >= P.t_load_ramp                     % 4 号机线性斜坡加载至满值并保持（渐变负载工况）
+        tl(4) = P.tl_ramp * min((t - P.t_load_ramp)/(P.t_ramp_full - P.t_load_ramp), 1);
+    end
 end
 
 function m = evaluate(name, w, se, t, P)
@@ -157,14 +162,14 @@ function m = evaluate(name, w, se, t, P)
 end
 
 function P = load_params()
-    P.n = 3; P.dt = 1e-4; P.t_end = 3.0;      % 电机台数 / 仿真步长 s / 总时长 s
-    P.J = [0.010, 0.011, 0.0095];             % 三台电机转动惯量 kg·m^2（±10% 参数摄动）
-    P.B = [0.0012, 0.0011, 0.0013];           % 粘性摩擦 N·m·s/rad
+    P.n = 4; P.dt = 1e-4; P.t_end = 3.0;      % 电机台数 / 仿真步长 s / 总时长 s
+    P.J = [0.010, 0.011, 0.0095, 0.0105];     % 四台电机转动惯量 kg·m^2（±10% 参数摄动）
+    P.B = [0.0012, 0.0011, 0.0013, 0.00115];  % 粘性摩擦 N·m·s/rad
     P.torque_limit = 5.0;                     % 转矩限幅 N·m
     P.speed_kp = 0.8; P.speed_ki = 30.0;      % 转速环 PI 增益
     P.w_star = 120.0; P.ramp_end = 0.5;       % 目标转速 rad/s；斜坡升速结束时刻 s
     P.t_load_step = 1.2; P.tl_step = 1.8;     % 2 号机突加负载的时刻 s 与幅值 N·m
     P.t_load_sin = 2.0; P.tl_sin_amp = 0.4; P.tl_sin_freq = 2.0;   % 3 号机波动负载参数
+    P.t_load_ramp = 1.8; P.t_ramp_full = 2.6; P.tl_ramp = 1.0;     % 4 号机斜坡负载参数
     P.sync_kp = 0.6; P.sync_ki = 5.0;         % 同步补偿 PI 增益 Ks / Ksi
 end
-
