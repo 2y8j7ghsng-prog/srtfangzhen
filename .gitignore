@@ -39,6 +39,9 @@ venv/
 .venv/
 .ipynb_checkpoints/
 
+# ===== C 编译产物 =====
+build/
+
 # ===== 编辑器 / 系统 =====
 .vscode/
 .idea/
