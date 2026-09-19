@@ -1,0 +1,20 @@
+{
+  "n_motor": 4,
+  "dt": 0.0001,
+  "t_end": 3.0,
+  "J": [0.010, 0.011, 0.0095, 0.0105],
+  "B": [0.0012, 0.0011, 0.0013, 0.00115],
+  "torque_limit": 5.0,
+  "speed_pi": { "kp": 0.8, "ki": 30.0 },
+  "w_star": 120.0,
+  "ramp_end": 0.5,
+  "t_load_step": 1.2,
+  "tl_step": 1.8,
+  "t_load_sin": 2.0,
+  "tl_sin_amp": 0.4,
+  "tl_sin_freq": 2.0,
+  "t_load_ramp": 1.8,
+  "t_ramp_full": 2.6,
+  "tl_ramp": 1.0,
+  "sync_pi": { "kp": 0.6, "ki": 5.0 }
+}
